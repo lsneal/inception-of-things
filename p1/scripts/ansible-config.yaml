@@ -1,0 +1,118 @@
+---
+- name: Build essential package and copy files
+  hosts: all
+  vars:
+    home_user: "/home/ubuntu"
+  tasks:
+    - name: Add vagrant key
+      ansible.builtin.apt_key:
+        url: https://apt.releases.hashicorp.com/gpg
+        state: present
+      become_user: root
+      become: true
+
+    - name: Add vagrant repo
+      ansible.builtin.apt_repository:
+        repo: deb [arch=amd64] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main
+        state: present
+      become_user: root
+      become: true
+
+    - name: Install essential packages
+      ansible.builtin.apt:
+        pkg:
+          - build-essential
+          - vagrant=2.4.1-1
+          - qemu-kvm
+          - libvirt-daemon-system
+          - ksmtuned
+          - libvirt-clients
+          - libxslt-dev
+          - libxml2-dev
+          - libvirt-dev
+          - zlib1g-dev
+          - ruby-dev
+          - ruby-libvirt
+          - ebtables
+          - nfs-kernel-server
+        update_cache: true
+      become_user: root
+      become: true
+
+    - name: Install Vagrant libvirt plugin
+      ansible.builtin.command: vagrant plugin install vagrant-libvirt
+      register: output
+      changed_when: output.rc != 0
+      become_user: ubuntu
+      become: true
+
+
+    - name: Install optionnal packages
+      ansible.builtin.apt:
+        pkg:
+          - cockpit
+          - cockpit-machines
+          - vim
+          - git
+      become_user: root
+      become: true
+
+    - name: Copy files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "{{ home_user }}/iot"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0666'
+      loop:
+        - ../../p1
+        - ../../p2
+        - ../../p3
+        - ../../bonus
+      become_user: ubuntu
+      become: true
+
+    - name: Copy ssh private key
+      ansible.builtin.copy:
+        src: "~/.ssh/id_rsa"
+        dest: "{{ home_user }}/.ssh/id_rsa"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0600'
+      become_user: ubuntu
+      become: true
+
+    - name: Delete content & directory
+      ansible.builtin.file:
+        state: absent
+        path: "{{ home_user }}/iot/p3/confs"
+      become_user: ubuntu
+      become: true
+
+    # Change github argocd !!!!
+    - name: Git clone
+      ansible.builtin.git:
+        repo: #link argocd github
+        dest: "{{ home_user }}/iot/p3/confs"
+        accept_hostkey: true
+        key_file: "{{ home_user }}/.ssh/id_rsa"
+      become_user: ubuntu
+      become: true
+
+    - name: Set git email
+      community.general.git_config:
+        name: user.email
+        repo: "{{ home_user }}/iot/p3/confs"
+        scope: local
+        value: ubuntu_root
+      become_user: ubuntu
+      become: true
+
+    - name: Set git name
+      community.general.git_config:
+        name: user.name
+        repo: "{{ home_user }}/iot/p3/confs"
+        scope: local
+        value: ubuntu_root
+      become_user: ubuntu
+      become: true

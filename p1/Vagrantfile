@@ -1,0 +1,41 @@
+server_start = <<-SHELL
+  sudo su
+  export INSTALL_K3S_EXEC="--flannel-iface=eth1 --write-kubeconfig-mode=644"
+  curl -sfL https://get.k3s.io | sh -
+  sleep 10
+  cp /var/lib/rancher/k3s/server/token /vagrant
+  SHELL
+
+agent_start = <<-SHELL
+  sudo su
+  export INSTALL_K3S_EXEC="--flannel-iface=eth1"
+  export K3S_URL=https://192.168.56.110:6443
+  export K3S_TOKEN_FILE=/vagrant/token
+  curl -sfL https://get.k3s.io | sh -
+  SHELL
+
+Vagrant.configure("2") do |config|  
+  config.vm.box = "generic/alpine319"
+  
+  config.vm.define "Server" do |server|
+    server.vm.hostname = "Server"
+    server.vm.network :private_network, ip: "192.168.56.110"
+    server.vm.synced_folder ".", "/vagrant", type: "nfs", mount_options: ["vers=3,tcp"]
+    server.vm.provider :libvirt do |v|
+      v.cpus = 1
+      v.memory = 1024
+    end
+    server.vm.provision :shell, :inline => server_start
+  end
+
+  config.vm.define "ServerWorker" do |agent|
+    agent.vm.hostname = "ServerWorker"
+    agent.vm.network :private_network, ip: "192.168.56.111"
+    agent.vm.synced_folder ".", "/vagrant", type: "nfs", mount_options: ["vers=3,tcp"]
+    agent.vm.provider :libvirt do |v|
+      v.cpus = 1
+      v.memory = 1024
+    end
+    agent.vm.provision :shell, :inline => agent_start
+  end
+end

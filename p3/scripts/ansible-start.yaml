@@ -1,0 +1,40 @@
+---
+- name: Create k3d cluster and install argocd
+  hosts: all
+  become_user: ubuntu
+  become: true
+  vars:
+    home_user: "/home/ubuntu"
+    cluster_name: argocd-cluster
+  environment:
+    KUBECONFIG: "{{ home_user }}/.kube/config"
+    K3S_CONFIG_FILE: "{{ home_user }}/.kube/config"
+
+  tasks:
+    - name: Delete requested cluster if existant. {{ cluster_name }}
+      ansible.builtin.command: "k3d cluster delete {{ cluster_name }}"
+      register: output
+      changed_when: output.rc != 0
+
+    - name: Create requested cluster. {{ cluster_name }}
+      ansible.builtin.command: k3d cluster create --agents 2 {{ cluster_name }} -p "8888:30080@agent:0"
+      register: output
+      changed_when: output.rc != 0
+
+    - name: Create argocd Namespace
+      kubernetes.core.k8s:
+        name: argocd
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ home_user }}/.kube/config"
+      vars:
+        ansible_python_interpreter: "{{ home_user }}/my_app/venv/bin/python"
+
+    - name: Apply argocd install
+      kubernetes.core.k8s:
+        namespace: argocd
+        src: "{{ home_user }}/argocd-install.yaml"
+        state: present
+      vars:
+        ansible_python_interpreter: "{{ home_user }}/my_app/venv/bin/python"

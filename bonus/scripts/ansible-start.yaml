@@ -1,0 +1,150 @@
+---
+- name: Start gitlab and argocd
+  hosts: all
+  become_user: ubuntu
+  become: true
+  vars:
+    home_user: "/home/ubuntu"
+    cluster_name: gitlab
+  environment:
+    K8S_AUTH_KUBECONFIG: "{{ home_user }}/.kube/config"
+    KUBECONFIG: "{{ home_user }}/.kube/config"
+
+  tasks:
+    - name: Delete required cluster if existant. {{ cluster_name }}
+      ansible.builtin.command: "k3d cluster delete {{ cluster_name }}"
+      register: output_k3d
+
+    - name: Delete argocd cluster if existant
+      ansible.builtin.command: "k3d cluster delete argocd-cluster"
+      register: output_argo
+      changed_when: output_argo.rc != 0
+
+    - name: Create required cluster {{ cluster_name }}
+      ansible.builtin.command: k3d cluster create --agents 2 {{ cluster_name }} -p "8888:30080@agent:1"
+      register: output_del
+      changed_when: output_del.rc != 0
+
+    - name: Add repo gitlab
+      kubernetes.core.helm_repository:
+        name: gitlab
+        repo_url: https://charts.gitlab.io/
+
+    - name: Deploy gitlab chart using values files
+      kubernetes.core.helm:
+        name: gitlab
+        chart_ref: "gitlab/gitlab"
+        release_namespace: gitlab
+        create_namespace: true
+        values:
+          global:
+            ingress:
+              configureCertmanager: false
+              class: "nginx"
+            hosts:
+              domain: 192.168.0.1
+              externalIP: 192.168.0.1
+              https: false
+            rails:
+              bootsnap:
+                enabled: false
+            shell:
+              port: 32022
+          certmanager:
+            install: false
+          nginx-ingress:
+            enabled: false
+          prometheus:
+            install: false
+          gitlab-runner:
+            install: false
+          gitlab:
+            webservice:
+              minReplicas: 1
+              maxReplicas: 1
+              service:
+                type: NodePort
+            sidekiq:
+              minReplicas: 1
+              maxReplicas: 1
+            gitlab-shell:
+              minReplicas: 1
+              maxReplicas: 1
+              service:
+                type: NodePort
+                nodePort: 32022
+          registry:
+            hpa:
+              minReplicas: 1
+              maxReplicas: 1
+      register: helm_result
+
+    - name: Create argocd Namespace
+      kubernetes.core.k8s:
+        name: argocd
+        api_version: v1
+        kind: Namespace
+        state: present
+        kubeconfig: "{{ home_user }}/.kube/config"
+      vars:
+        ansible_python_interpreter: "{{ home_user }}/my_app/venv/bin/python"
+
+    - name: Apply argocd install
+      kubernetes.core.k8s:
+        namespace: argocd
+        src: "{{ home_user }}/argocd-install.yaml"
+        state: present
+      vars:
+        ansible_python_interpreter: "{{ home_user }}/my_app/venv/bin/python"
+  
+    - name: Get IP gitlab
+      ansible.builtin.shell: 
+        cmd: set -o pipefail && kubectl get svc -n gitlab | grep gitlab-webservice-default | awk '{print $3}'
+        executable: /bin/bash
+      register: gitlab_service_ip
+      changed_when: gitlab_service_ip.rc != 0
+
+    - name: Replace webservice on yaml apps argocd
+      ansible.builtin.lineinfile:
+        path: "{{ home_user }}/iot/bonus/confs/argocd.yaml"
+        regexp: 'repoURL: URL'
+        line: "    repoURL: http://{{ gitlab_service_ip.stdout }}:8181/root/test.git"
+
+    - name: Get port gitlab webservice
+      ansible.builtin.shell: 
+        cmd: set -o pipefail && kubectl get svc -n gitlab | grep gitlab-webservice-default | awk '{print $5}' | tr "," "\t" | awk '{print $2}' | tr "/" "\t" | tr ":" "\t" | awk '{print $2}'
+        executable: /bin/bash
+      register: gitlab_webservice_nodeport
+      changed_when: gitlab_webservice_nodeport.rc != 0
+
+    - name: Edit cluster to map webservice port gitlab
+      ansible.builtin.command: k3d cluster edit {{ cluster_name }} --port-add "8181:{{ gitlab_webservice_nodeport.stdout }}@agent:0"
+      register: output_edit
+      changed_when: output_edit.rc != 0
+
+    - name: Patch ArgoCD server service to NodePort
+      ansible.builtin.command: "kubectl patch svc argocd-server -n argocd -p '{\"spec\": {\"type\": \"NodePort\"}}'"
+
+    - name: Get port argocd webservice
+      ansible.builtin.shell: 
+        cmd: set -o pipefail && kubectl get svc -n argocd | grep "argocd-server " | awk '{print $5}' | tr "," "\t" | awk '{print $1}' | tr "/" "\t" | tr ":" "\t" | awk '{print $2}'
+        executable: /bin/bash
+      register: argocd_webservice_nodeport
+      changed_when: argocd_webservice_nodeport.rc != 0
+
+    - name: Edit cluster to map webservice port argocd
+      ansible.builtin.command: k3d cluster edit {{ cluster_name }} --port-add "9999:{{ argocd_webservice_nodeport.stdout }}@agent:0"
+      register: output_edit
+      changed_when: output_edit.rc != 0
+
+    - name: Get pods on namespace gitlab and wait pods
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ home_user }}/.kube/config"
+        namespace: gitlab
+        kind: Pod
+      register: pod_info
+      until: pod_info.resources | selectattr('status.phase', 'in', ['Running', 'Succeeded']) | list | length == pod_info.resources | length
+      retries: 30
+      delay: 45
+      vars:
+        ansible_python_interpreter: "{{ home_user }}/my_app/venv/bin/python"

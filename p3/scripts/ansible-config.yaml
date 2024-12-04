@@ -1,0 +1,64 @@
+---
+- name: Install essential package
+  hosts: all
+  become: true
+  become_user: root
+  vars:
+    home_user: "/home/ubuntu"
+  environment:
+    KUBECONFIG: "{{ home_user }}/.kube/config"
+    K3S_KUBECONFIG_MODE: "644"
+    K3S_CONFIG_FILE: "{{ home_user }}/.kube/config"
+
+  tasks:
+    - name: Install docker and curl and pip
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - docker-compose-v2
+          - python3-pip
+          - python3-virtualenv
+
+    - name: Install pip packages
+      ansible.builtin.pip:
+        name:
+          - openshift
+          - pyyaml
+          - kubernetes
+          - jmespath
+        virtualenv: "{{ home_user }}/my_app/venv"
+        virtualenv_command: virtualenv
+
+    - name: Add the group 'docker'
+      ansible.builtin.user:
+        name: ubuntu
+        groups: docker
+        append: true
+
+    - name: Download K3d
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh
+        dest: "{{ home_user }}/k3d-install.sh"
+        mode: '0777'
+
+    - name: Install K3d
+      ansible.builtin.command: "{{ home_user }}/k3d-install.sh"
+      register: output
+      changed_when: output.rc != 0
+
+    - name: Download k3s install script
+      ansible.builtin.get_url:
+        url: https://get.k3s.io/
+        dest: "{{ home_user }}/k3s-install.sh"
+        mode: "0777"
+
+    - name: Install K3s
+      ansible.builtin.command: "{{ home_user }}/k3s-install.sh"
+      register: output
+      changed_when: output.rc != 0
+
+    - name: Get argocd install
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+        dest: "{{ home_user }}/argocd-install.yaml"
+        mode: '0777'
